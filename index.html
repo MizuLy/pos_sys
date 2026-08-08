@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cashiers</title>
+    <style>
+      :root {
+        --bg: #09090b;
+        --card-bg: #121215;
+        --border: #3f3f46;
+        --border-hover: #71717a;
+        --text-bright: #ffffff;
+        --text-muted: #a1a1aa;
+        --accent: #60a5fa;
+        --danger: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+
+      body {
+        background-color: var(--bg);
+        color: var(--text-bright);
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 60px 20px;
+        line-height: 1.5;
+      }
+
+      .wrapper {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 32px;
+      }
+
+      h1 {
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--text-bright);
+        margin-bottom: 16px;
+      }
+
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px;
+      }
+
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      input {
+        background: #000000;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        color: var(--text-bright);
+        font-size: 0.9rem;
+        transition: border-color 0.15s ease;
+      }
+
+      input::placeholder {
+        color: var(--text-muted);
+      }
+
+      input:focus {
+        outline: none;
+        border-color: var(--border-hover);
+      }
+
+      input:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      button[type="submit"] {
+        background: var(--text-bright);
+        color: #000000;
+        border: none;
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s ease;
+        margin-top: 4px;
+      }
+
+      button[type="submit"]:hover {
+        opacity: 0.9;
+      }
+
+      #message {
+        font-size: 0.85rem;
+        color: var(--accent);
+        font-weight: 500;
+        min-height: 1.2em;
+      }
+
+      ul#cashier {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      ul#cashier li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        background: #000000;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 0.9rem;
+      }
+
+      .item-info {
+        color: var(--text-bright);
+        font-size: 0.9rem;
+      }
+
+      .item-info strong {
+        color: var(--text-muted);
+        font-weight: 500;
+        margin-right: 6px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      .btn-action {
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 500;
+        padding: 2px 4px;
+        transition: color 0.15s ease;
+      }
+
+      .btn-action.edit:hover {
+        color: var(--text-bright);
+      }
+
+      .btn-action.del:hover {
+        color: var(--danger);
+      }
+
+      @media (max-width: 600px) {
+        .wrapper {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrapper">
+      <div class="card">
+        <h1>Cashier Form</h1>
+        <form method="POST" id="cashierForm">
+          <input
+            type="text"
+            id="cashierId"
+            disabled
+            placeholder="ID (Auto-generated)"
+          />
+          <input
+            type="text"
+            value=""
+            id="fullname"
+            placeholder="Full name"
+            required
+          />
+          <input
+            type="text"
+            value=""
+            id="phone"
+            placeholder="Phone number"
+            required
+          />
+          <input
+            type="text"
+            value=""
+            id="username"
+            placeholder="Username"
+            required
+          />
+          <p id="message"></p>
+          <button type="submit" id="btnSubmit">Create</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h1>Cashiers List</h1>
+        <ul id="cashier"></ul>
+      </div>
+    </div>
+  </body>
+  <script>
+    let cashier = document.getElementById("cashier");
+
+    const API = "http://localhost:8080/api/cashier";
+
+    async function fetchData() {
+      try {
+        const res = await fetch(API);
+        const response = await res.json();
+
+        cashier.innerHTML = response.data
+          .map(
+            (item) => `<li>
+            <span class="item-info"><strong>#${item.id}</strong>${item.fullname}</span>
+            <div class="actions">
+              <button class="btn-action edit btnEdit" 
+                data-id="${item.id}" 
+                data-fullname="${item.fullname}" 
+                data-phone="${item.phone}" 
+                data-username="${item.username}">Edit</button>
+              <button class="btn-action del btnDel" data-id="${item.id}">Delete</button>
+            </div>
+          </li>`,
+          )
+          .join("");
+
+        document.querySelectorAll(".btnDel").forEach((btn) => {
+          btn.onclick = function () {
+            deleteData(this.dataset.id);
+          };
+        });
+
+        document.querySelectorAll(".btnEdit").forEach((btn) => {
+          btn.onclick = function () {
+            let id = this.dataset.id;
+            let fullname = this.dataset.fullname;
+            let phone = this.dataset.phone;
+            let username = this.dataset.username;
+
+            document.getElementById("cashierId").value = id;
+            document.getElementById("fullname").value = fullname;
+            document.getElementById("phone").value = phone;
+            document.getElementById("username").value = username;
+
+            document.getElementById("btnSubmit").innerHTML = "Update";
+          };
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    fetchData();
+
+    document
+      .getElementById("cashierForm")
+      .addEventListener("submit", function (e) {
+        e.preventDefault();
+
+        let id = document.getElementById("cashierId").value;
+        let fullname = document.getElementById("fullname").value;
+        let phone = document.getElementById("phone").value;
+        let username = document.getElementById("username").value;
+
+        if (id) {
+          updateData(fullname, phone, username, id);
+        } else {
+          createData(fullname, phone, username);
+        }
+      });
+
+    async function createData(fullname, phone, username) {
+      try {
+        const res = await fetch(API, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ fullname, phone, username }),
+        });
+
+        const response = await res.json();
+        document.getElementById("message").innerHTML = response.message;
+
+        fetchData();
+        document.getElementById("cashierForm").reset();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function deleteData(id) {
+      try {
+        const res = await fetch(`${API}/${id}`, {
+          method: "DELETE",
+        });
+
+        const response = await res.json();
+
+        fetchData();
+        document.getElementById("message").innerText = response.message;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function updateData(fullname, phone, username, id) {
+      try {
+        const res = await fetch(`${API}/${id}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ fullname, phone, username }),
+        });
+
+        const response = await res.json();
+        fetchData();
+
+        document.getElementById("btnSubmit").innerHTML = "Create";
+        document.getElementById("cashierForm").reset();
+        document.getElementById("message").innerText = response.message;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  </script>
+</html>
