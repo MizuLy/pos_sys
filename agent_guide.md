@@ -8,10 +8,11 @@ modifying code. It documents the tech stack, structure, conventions, and known q
 `pos_sys` is a Point-of-Sale (POS) **REST API backend** built with Spring Boot. It is a
 learning/demonstration project that mixes several data-access styles on purpose:
 
-- **JPA + Repository** (Product, Table) — full `JpaRepository` CRUD
+- **JPA + Repository** (Product, Table, Order) — full `JpaRepository` CRUD
 - **Raw JDBC + `JdbcTemplate`** (Category, Cashier) — hand-written SQL
 
-There is **no service layer, no authentication, and no global exception handler**. It is a
+There is **no authentication and no global exception handler**. There is also **no service
+layer** except the `Order` feature, which delegates to `OrderService` (see §7). It is a
 pure backend; the frontend is expected to live elsewhere (a React app served on
 `localhost:3000` per the CORS config).
 
@@ -70,22 +71,35 @@ src/main/java/com/example/pos_sys/
 │   ├── CategoryController.java     # /api/category   — JdbcTemplate (raw SQL)
 │   ├── ProductController.java      # /api/product    — JPA + DTOs + Mapper
 │   ├── TableController.java        # /api/tables     — JPA, entity used directly as DTO
-│   └── CashierController.java      # /api/cashier    — JdbcTemplate, body as Map<String,Object>
+│   ├── CashierController.java      # /api/cashier    — JdbcTemplate, body as Map<String,Object>
+│   └── OrderController.java        # /api/orders     — thin controller, delegates to OrderService
+├── dtos/orders/
+│   ├── OrderRequestDTO.java        # Order input (nested items list) + validation
+│   ├── OrderItemRequestDTO.java    # Per-line product input + validation
+│   ├── OrderResponseDTO.java       # Order output shape (table info + item lines)
+│   └── OrderItemResponseDTO.java   # Per-line output shape
 ├── dtos/products/
 │   ├── ProductRequestDTO.java      # Input validation for product create/update
 │   └── ProductResponseDTO.java     # Output shape for product responses
 ├── enums/
 │   └── TableEnum.java              # AVAILABLE | OCCUPIED
 ├── mappers/
-│   └── ProductMapper.java          # Entity <-> DTO conversion + category FK resolution
+│   ├── ProductMapper.java          # Entity <-> DTO conversion + category FK resolution
+│   └── OrderMapper.java            # Entity <-> DTO conversion + FK resolution + totals
 ├── models/
 │   ├── Category.java               # tb_categories
 │   ├── Product.java                # tb_products
-│   └── Table.java                  # tb_table (note: name collides with java.sql.Table)
-└── repositories/
-    ├── CategoryRepository.java     # JpaRepository<Category, Long>
-    ├── ProductRepository.java      # JpaRepository<Product, Long>
-    └── TableRepository.java        # JpaRepository<Table, Long>
+│   ├── Table.java                  # tb_table (note: name collides with java.sql.Table)
+│   ├── Order.java                  # tb_orders (parent; cascade to details)
+│   └── OrderDetail.java            # tb_order_details (order + product lines)
+├── repositories/
+│   ├── CategoryRepository.java     # JpaRepository<Category, Long>
+│   ├── ProductRepository.java      # JpaRepository<Product, Long>
+│   ├── TableRepository.java        # JpaRepository<Table, Long>
+│   ├── OrderRepository.java        # JpaRepository<Order, Long>
+│   └── OrderDetailRepository.java  # JpaRepository<OrderDetail, Long>
+└── services/
+    └── OrderService.java           # Order business logic + @Transactional boundaries
 ```
 
 Root-level files: `index.html`, `test.html` are throwaway front-end mockups for manual
@@ -115,6 +129,29 @@ Tables created automatically by Hibernate (`ddl-auto=update`):
 | id | BIGINT | PK, auto-increment |
 | table_name | VARCHAR(50) | not empty |
 | status | VARCHAR(20) | enum string, default `AVAILABLE` |
+
+**`tb_orders`**
+| column | type | constraints |
+|---|---|---|
+| id | BIGINT | PK, auto-increment |
+| table_id | BIGINT | FK → tb_table.id, not null |
+| cashier_id | BIGINT | FK → tb_cashiers.id (plain Long field — no JPA association, see Quirks) |
+| queue_no | INT | nullable |
+| time_in | DATETIME | nullable (defaults to now on create) |
+| time_out | DATETIME | nullable |
+| payment_method | VARCHAR(20) | not blank |
+| subtotal | DECIMAL(12,2) | computed from item lines |
+
+**`tb_order_details`**
+| column | type | constraints |
+|---|---|---|
+| id | BIGINT | PK, auto-increment |
+| order_id | BIGINT | FK → tb_orders.id, not null (cascade-deleted with the order) |
+| product_id | BIGINT | FK → tb_products.id, not null |
+| qty | INT | not null, ≥ 1 |
+| unit_price | DECIMAL(12,2) | defaults to the product's price if omitted |
+| discount_percent | DECIMAL(12,2) | percent 0–100, defaults to 0 |
+| total | DECIMAL(12,2) | computed = unit_price × qty × (1 − discount/100) |
 
 **`tb_cashiers`** — NOT a JPA entity; table must exist in DB manually. Referenced only by
 raw SQL in `CashierController`. Expected columns: `id`, `fullname`, `phone`, `username`.
@@ -154,6 +191,24 @@ Product request validation (`ProductRequestDTO`): `product_name` @NotBlank ≤10
 - `PUT /{id}` → body `{fullname, phone, username}` → `{message: "Update success"}`
 - `DELETE /{id}` → `{message: "Delete success"}`
 
+### Order — `/api/orders` (JPA + Service + DTOs + Mapper)
+- `GET` → list all orders with their item lines → `{status: "success", data: [...]}`
+- `GET /{id}` → one → `{status: "success", data: {...}}` or `{status: 404, message: "Order not found"}`
+- `POST` → create order + lines → `{message: "...", data: {...}}`
+- `PUT /{id}` → replace fields + lines → `{message: "...", data: {...}}`
+- `DELETE /{id}` → `{message: "Order deleted successfully"}` (404 → `{status: 404, message: "..."}`)
+
+Order create/update body (`OrderRequestDTO`):
+`{table_id, cashier_id, queue_no?, time_in?, time_out?, payment_method, items: [{product_id, qty, unit_price?, discount_percent?}]}`
+
+- `table_id` @NotNull, `cashier_id` @NotNull, `payment_method` @NotBlank ≤20 chars,
+  `items` @NotNull + @Size(min=1); per line: `product_id` @NotNull, `qty` @NotNull + @Min(1),
+  `unit_price` optional (falls back to product price), `discount_percent` optional 0–100.
+- `subtotal` and each line `total` are computed server-side; a missing `time_in` defaults to now.
+- Not-found / bad FK (`table_id`, `product_id`) → `EntityNotFoundException` caught in the
+  controller → `{status: "Error"|404, message: "..."}`.
+- Validation errors still bubble up as Spring default responses (no global handler, see Quirks).
+
 ## 7. Conventions (follow these when editing)
 
 1. **Controllers return `Map<String, Object>`.** Success shapes use a `data` key; CRUD
@@ -164,6 +219,9 @@ Product request validation (`ProductRequestDTO`): `product_name` @NotBlank ≤10
      `findById()` + `existsById()` guards, and `Map.of(...)` for small responses.
    - Category/Cashier → constructor-inject `JdbcTemplate`, write raw SQL with `?`
      placeholders, and `HashMap`/`Map.of` for responses.
+   - Order → the **only** controller with a service layer. Keep business logic and
+     `@Transactional` boundaries in `OrderService`; the controller only maps responses and
+     catches `EntityNotFoundException`.
 3. **Validation:** annotate DTOs/entities with `jakarta.validation` constraints and add
    `@Valid` on `@RequestBody` parameters. `@NotBlank`/`@NotNull`/`@Size`/`@Digits`/
    `@DecimalMin` are already in use.
@@ -190,7 +248,8 @@ Product request validation (`ProductRequestDTO`): `product_name` @NotBlank ≤10
   as Spring default responses, not the app's `{status, message}` shape. There is no
   `@RestControllerAdvice`.
 - **`tb_cashiers` is not an entity.** Hibernate will not create it. Creating/altering it is
-  manual SQL only.
+  manual SQL only. `Order.cashier_id` is therefore a **plain `Long` column** with no JPA
+  association — integrity is enforced by the DB FK alone, and the mapper does not resolve it.
 - **Entity field naming** is snake_case, which deviates from standard Java camelCase —
   preserve it rather than "fixing" it unless asked.
 - **DB name mismatch:** app connects to `db_2_5`, docker compose seeds `lessons_db`.
@@ -204,5 +263,6 @@ Product request validation (`ProductRequestDTO`): `product_name` @NotBlank ≤10
 - Verify changes with `./mvnw test` and, when possible, a manual curl against the running
   app. The DB must be up first (see section 3).
 - Never add secrets to `application.properties`; credentials are dev-only local defaults.
-- Do not restructure the package layout or introduce a service/exception layer without
-  asking the user — this is a deliberate teaching-style project.
+- The `services/` package exists **only** for the `Order` feature. Do not move other
+  controllers to services (Product/Table/Category/Cashier) without asking the user — the
+  rest of the project intentionally skips a service layer.
